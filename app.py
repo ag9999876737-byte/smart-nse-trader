@@ -21,9 +21,18 @@ def get_nse_stocks():
 # Check Market Regime
 # -------------------------------
 def market_trend():
-    nifty = yf.download("^NSEI", period="3mo", progress=False)
-    nifty['EMA50'] = nifty['Close'].ewm(span=50).mean()
-    return nifty['Close'].iloc[-1] > nifty['EMA50'].iloc[-1]
+    try:
+        nifty = yf.download("^NSEI", period="3mo", progress=False)
+
+        if nifty.empty or len(nifty) < 50:
+            return True  # If data fails, allow scan instead of crash
+
+        nifty['EMA50'] = nifty['Close'].ewm(span=50).mean()
+
+        return nifty['Close'].iloc[-1] > nifty['EMA50'].iloc[-1]
+
+    except:
+        return True  # Fail safe: don't block scan
 
 # -------------------------------
 # Analyze Stock
@@ -108,7 +117,7 @@ def analyze_stock(symbol, nifty_data):
 
 if st.button("🔎 Scan Market for Swing Setups"):
 
-    if not market_trend():
+    if not market_trend() is False:
         st.warning("Market trend is weak (NIFTY below 50 EMA). Avoid aggressive buying.")
         st.stop()
 
