@@ -5,31 +5,56 @@ import numpy as np
 
 st.set_page_config(page_title="Smart Swing Scanner Pro", layout="wide")
 
-st.title("📈 Indian Market Smart Swing Scanner")
-st.write("Momentum + Relative Strength + Volatility Structure")
+st.title("📈 Indian Market Smart Swing Scanner (Top 100)")
+st.write("Momentum Ranking Engine – Scans Top 100 NSE Stocks")
 
 # -----------------------------------
-# Market Trend Check (Warning Only)
+# Market Regime (Info Only)
 # -----------------------------------
-def market_trend():
+def get_market_regime():
     nifty = yf.download("^NSEI", period="3mo", interval="1d", progress=False)
     if nifty.empty or len(nifty) < 50:
-        return True
+        return "Unknown"
+
     nifty["EMA50"] = nifty["Close"].ewm(span=50).mean()
-    return nifty["Close"].iloc[-1] > nifty["EMA50"].iloc[-1]
+    if nifty["Close"].iloc[-1] > nifty["EMA50"].iloc[-1]:
+        return "Bullish"
+    else:
+        return "Weak"
 
-if market_trend() is False:
-    st.warning("⚠ Market trend is weak (NIFTY below 50 EMA). Suggestions shown but risk is higher.")
+market_regime = get_market_regime()
+st.info(f"Market Regime: {market_regime}")
 
 # -----------------------------------
-# NSE STOCK LIST (Expand Anytime)
+# Top 100 NSE Stocks (Nifty 50 + Next 50)
 # -----------------------------------
-nse_stocks = [
+top_100_stocks = [
+    # Nifty 50
     "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
     "LT.NS","SBIN.NS","AXISBANK.NS","MARUTI.NS","BAJFINANCE.NS",
-    "ITC.NS","SUNPHARMA.NS","TITAN.NS","ULTRACEMCO.NS",
-    "NTPC.NS","POWERGRID.NS","ADANIENT.NS","ADANIPORTS.NS",
-    "HCLTECH.NS","WIPRO.NS","ONGC.NS","COALINDIA.NS"
+    "ITC.NS","SUNPHARMA.NS","TITAN.NS","ULTRACEMCO.NS","NTPC.NS",
+    "POWERGRID.NS","ADANIENT.NS","ADANIPORTS.NS","HCLTECH.NS","WIPRO.NS",
+    "ONGC.NS","COALINDIA.NS","JSWSTEEL.NS","HINDALCO.NS","TATASTEEL.NS",
+    "BHARTIARTL.NS","NESTLEIND.NS","ASIANPAINT.NS","HINDUNILVR.NS",
+    "BAJAJFINSV.NS","BAJAJ-AUTO.NS","DIVISLAB.NS","DRREDDY.NS",
+    "BRITANNIA.NS","HEROMOTOCO.NS","INDUSINDBK.NS","EICHERMOT.NS",
+    "GRASIM.NS","TECHM.NS","UPL.NS","CIPLA.NS","APOLLOHOSP.NS",
+    "TATAMOTORS.NS","SHREECEM.NS","SBILIFE.NS","HDFCLIFE.NS",
+    "BPCL.NS","IOC.NS","M&M.NS",
+
+    # Nifty Next 50 (Representative Large Caps)
+    "ADANIGREEN.NS","ADANIPOWER.NS","AMBUJACEM.NS","BANKBARODA.NS",
+    "BERGEPAINT.NS","BOSCHLTD.NS","CHOLAFIN.NS","DABUR.NS",
+    "DLF.NS","GAIL.NS","GODREJCP.NS","HAVELLS.NS","ICICIGI.NS",
+    "ICICIPRULI.NS","IDBI.NS","INDIGO.NS","JINDALSTEL.NS",
+    "LICHSGFIN.NS","LODHA.NS","LUPIN.NS","MARICO.NS",
+    "MUTHOOTFIN.NS","NAUKRI.NS","PEL.NS","PIDILITIND.NS",
+    "PNB.NS","RECLTD.NS","SAIL.NS","SIEMENS.NS",
+    "SRF.NS","TATACOMM.NS","TORNTPHARM.NS","TVSMOTOR.NS",
+    "UNITDSPR.NS","VEDL.NS","VOLTAS.NS","ZEEL.NS",
+    "ZOMATO.NS","NYKAA.NS","IRCTC.NS","PFC.NS",
+    "ABB.NS","BHEL.NS","CANBK.NS","COLPAL.NS",
+    "CONCOR.NS","HAL.NS","NMDC.NS","POLYCAB.NS"
 ]
 
 # -----------------------------------
@@ -55,9 +80,6 @@ def analyze_stock(symbol):
         )
 
         df["ATR14"] = df["TR"].rolling(14).mean()
-        df["ATR5"] = df["TR"].rolling(5).mean()
-        df["ATR20"] = df["TR"].rolling(20).mean()
-
         latest = df.iloc[-1]
 
         price = latest["Close"]
@@ -66,66 +88,45 @@ def analyze_stock(symbol):
 
         score = 0
 
-        # Trend Strength
         if price > ema20:
-            score += 15
+            score += 20
         if price > ema50:
-            score += 15
+            score += 20
 
-        # 30-Day Breakout
         breakout_level = df["High"].rolling(30).max().iloc[-2]
         if price > breakout_level:
             score += 20
 
-        # Volume Strength
         avg_vol = df["Volume"].rolling(20).mean().iloc[-1]
         if latest["Volume"] > 1.3 * avg_vol:
             score += 15
 
-        # Relative Strength vs NIFTY
         nifty = yf.download("^NSEI", period="2mo", interval="1d", progress=False)
         if not nifty.empty and len(nifty) > 30:
             stock_return = (price / df["Close"].iloc[-20]) - 1
             nifty_return = (nifty["Close"].iloc[-1] / nifty["Close"].iloc[-20]) - 1
             if stock_return > nifty_return:
-                score += 20
+                score += 15
 
-        # Not Overextended
-        distance_from_ema20 = (price - ema20) / ema20
-        if distance_from_ema20 < 0.08:
-            score += 10
-
-        # Volatility Contraction
-        if latest["ATR5"] < latest["ATR20"]:
-            score += 5
-
-        # Strong Close
-        candle_range = latest["High"] - latest["Low"]
-        if candle_range > 0:
-            close_position = (price - latest["Low"]) / candle_range
-            if close_position > 0.6:
-                score += 10
-
-        # Risk Model
         atr = latest["ATR14"]
         stop_loss = price - 1.5 * atr
         target = price + 2 * atr
 
-        # Rating System
         if score >= 70:
-            rating = "🔥 STRONG BUY"
+            rating = "🔥 Strong Buy"
         elif score >= 55:
-            rating = "✅ BUY"
+            rating = "✅ Buy"
         elif score >= 40:
-            rating = "👀 WATCH"
+            rating = "👀 Watch"
         else:
-            rating = "⚠ AVOID"
+            rating = "Avoid"
 
         return {
             "Symbol": symbol,
             "Price": round(price, 2),
             "Score": score,
             "Rating": rating,
+            "Market Regime": market_regime,
             "Stop Loss": round(stop_loss, 2),
             "Target": round(target, 2)
         }
@@ -136,14 +137,13 @@ def analyze_stock(symbol):
 # -----------------------------------
 # Scan Button
 # -----------------------------------
-if st.button("🔍 Scan Market"):
+if st.button("🔍 Scan Top 100 Stocks"):
 
     results = []
     progress = st.progress(0)
+    total = len(top_100_stocks)
 
-    total = len(nse_stocks)
-
-    for i, stock in enumerate(nse_stocks):
+    for i, stock in enumerate(top_100_stocks):
         res = analyze_stock(stock)
         if res:
             results.append(res)
@@ -152,7 +152,7 @@ if st.button("🔍 Scan Market"):
     if results:
         df_results = pd.DataFrame(results)
         df_results = df_results.sort_values(by="Score", ascending=False)
-        st.success("Ranked Market Suggestions")
-        st.dataframe(df_results.head(10))
+        st.success("Top Ranked Opportunities")
+        st.dataframe(df_results.head(15))
     else:
-        st.info("Data unavailable today.")
+        st.info("No data available.")
