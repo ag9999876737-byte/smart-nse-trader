@@ -11,6 +11,7 @@ st.write("Momentum Ranking Engine – Large + Midcap Universe")
 # -----------------------------------
 # MARKET REGIME
 # -----------------------------------
+@st.cache_data
 def get_market_regime():
     nifty = yf.download("^NSEI", period="3mo", interval="1d", progress=False)
     if nifty.empty or len(nifty) < 50:
@@ -26,26 +27,30 @@ market_regime = get_market_regime()
 st.info(f"Market Regime: {market_regime}")
 
 # -----------------------------------
-# TOP 250 STOCK UNIVERSE
-# (Representative Large + Midcaps)
+# STATIC TOP 250 NSE STOCK LIST
 # -----------------------------------
 
-top_250_stocks = pd.read_csv(
-    "https://raw.githubusercontent.com/datasets/nse-data/master/data/companies.csv"
-)
+# Instead of external CSV, use yfinance NSE ticker universe filter
+@st.cache_data
+def get_nse_top_250():
+    url = "https://archives.nseindia.com/content/indices/ind_nifty250list.csv"
+    try:
+        df = pd.read_csv(url)
+        symbols = df["Symbol"].tolist()
+        return [s + ".NS" for s in symbols]
+    except:
+        return []
 
-# If above URL ever fails, fallback:
-if top_250_stocks.empty:
-    st.error("Stock universe could not load.")
+symbols = get_nse_top_250()
+
+if not symbols:
+    st.error("Unable to load Nifty 250 list. Try again later.")
     st.stop()
-
-# Take first 250 NSE symbols
-symbols = top_250_stocks["Symbol"].head(250).tolist()
-symbols = [s + ".NS" for s in symbols]
 
 # -----------------------------------
 # STOCK SCORING
 # -----------------------------------
+@st.cache_data(show_spinner=False)
 def analyze_stock(symbol):
 
     try:
@@ -74,23 +79,19 @@ def analyze_stock(symbol):
 
         score = 0
 
-        # Trend
         if price > ema20:
             score += 20
         if price > ema50:
             score += 20
 
-        # Breakout
         breakout_level = df["High"].rolling(30).max().iloc[-2]
         if price > breakout_level:
             score += 20
 
-        # Volume
         avg_vol = df["Volume"].rolling(20).mean().iloc[-1]
         if latest["Volume"] > 1.3 * avg_vol:
             score += 15
 
-        # Relative Strength vs NIFTY
         nifty = yf.download("^NSEI", period="2mo", interval="1d", progress=False)
         if not nifty.empty and len(nifty) > 30:
             stock_return = (price / df["Close"].iloc[-20]) - 1
@@ -127,7 +128,7 @@ def analyze_stock(symbol):
 # -----------------------------------
 # SCAN BUTTON
 # -----------------------------------
-if st.button("🔍 Scan Top 250 Stocks"):
+if st.button("🔍 Scan Nifty 250"):
 
     results = []
     progress = st.progress(0)
@@ -145,4 +146,4 @@ if st.button("🔍 Scan Top 250 Stocks"):
         st.success("Top Ranked Opportunities (Top 20 Shown)")
         st.dataframe(df_results.head(20))
     else:
-        st.info("No data available.")
+        st.info("No valid setups found.")
