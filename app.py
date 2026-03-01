@@ -1,158 +1,151 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import numpy as np
-import yfinance as yf
 
-st.set_page_config(page_title="Smart Swing Scanner", layout="wide")
-st.title("🚀 Smart Swing Trading Scanner")
+st.set_page_config(page_title="Smart Swing Scanner Pro", layout="wide")
 
-st.markdown("Scans NSE stocks for breakout swing opportunities.")
-
-# -------------------------------
-# Get NSE Stock List
-# -------------------------------
-@st.cache_data(ttl=3600)
-def get_nse_stocks():
-    url = "https://archives.nseindia.com/content/equities/EQUITY_L.csv"
-    df = pd.read_csv(url)
-    return df['SYMBOL'].tolist()
+st.title("📈 Indian Market Smart Swing Scanner (Pro Version)")
+st.write("Breakout + Relative Strength + Volatility Contraction Strategy")
 
 # -------------------------------
-# Check Market Regime
+# Market Trend Check (No Stop)
 # -------------------------------
 def market_trend():
-    try:
-        nifty = yf.download("^NSEI", period="3mo", progress=False)
+    nifty = yf.download("^NSEI", period="3mo", interval="1d", progress=False)
+    if nifty.empty or len(nifty) < 50:
+        return True
+    nifty["EMA50"] = nifty["Close"].ewm(span=50).mean()
+    return nifty["Close"].iloc[-1] > nifty["EMA50"].iloc[-1]
 
-        if nifty.empty or len(nifty) < 50:
-            return True  # If data fails, allow scan instead of crash
-
-        nifty['EMA50'] = nifty['Close'].ewm(span=50).mean()
-
-        return nifty['Close'].iloc[-1] > nifty['EMA50'].iloc[-1]
-
-    except:
-        return True  # Fail safe: don't block scan
+if market_trend() is False:
+    st.warning("⚠ Market trend is weak (NIFTY below 50 EMA). Trade cautiously.")
 
 # -------------------------------
-# Analyze Stock
+# NSE STOCK LIST (Expandable)
 # -------------------------------
-def analyze_stock(symbol, nifty_data):
+nse_stocks = [
+    "RELIANCE.NS","TCS.NS","INFY.NS","HDFCBANK.NS","ICICIBANK.NS",
+    "LT.NS","SBIN.NS","AXISBANK.NS","MARUTI.NS","BAJFINANCE.NS",
+    "ITC.NS","SUNPHARMA.NS","TITAN.NS","ULTRACEMCO.NS",
+    "NTPC.NS","POWERGRID.NS","ADANIENT.NS","ADANIPORTS.NS",
+    "HCLTECH.NS","WIPRO.NS","ONGC.NS","COALINDIA.NS"
+]
+
+# -------------------------------
+# Stock Analysis Logic
+# -------------------------------
+def analyze_stock(symbol):
 
     try:
-        data = yf.download(symbol + ".NS", period="3mo", progress=False)
+        df = yf.download(symbol, period="6mo", interval="1d", progress=False)
 
-        if len(data) < 50:
+        if df.empty or len(df) < 60:
             return None
 
-        close = data['Close']
-        high = data['High']
-        low = data['Low']
-        volume = data['Volume']
+        df["EMA20"] = df["Close"].ewm(span=20).mean()
+        df["EMA50"] = df["Close"].ewm(span=50).mean()
 
-        current_price = close.iloc[-1]
+        df["TR"] = np.maximum(
+            df["High"] - df["Low"],
+            np.maximum(
+                abs(df["High"] - df["Close"].shift()),
+                abs(df["Low"] - df["Close"].shift())
+            )
+        )
 
-        if current_price < 50:
-            return None
+        df["ATR14"] = df["TR"].rolling(14).mean()
+        df["ATR5"] = df["TR"].rolling(5).mean()
+        df["ATR20"] = df["TR"].rolling(20).mean()
 
-        # EMAs
-        ema20 = close.ewm(span=20).mean().iloc[-1]
-        ema50 = close.ewm(span=50).mean().iloc[-1]
+        latest = df.iloc[-1]
 
-        # Breakout logic
-        breakout_level = high.rolling(20).max().iloc[-2]
-        breakout = current_price > breakout_level
+        price = latest["Close"]
+        ema20 = latest["EMA20"]
+        ema50 = latest["EMA50"]
 
-        # Volume confirmation
-        avg_vol = volume.rolling(20).mean().iloc[-1]
-        vol_confirm = volume.iloc[-1] > 1.5 * avg_vol
-
-        # Relative strength vs NIFTY
-        stock_return = (current_price / close.iloc[-20]) - 1
-        nifty_return = (nifty_data['Close'].iloc[-1] / nifty_data['Close'].iloc[-20]) - 1
-        relative_strength = stock_return > nifty_return
-
-        # ATR for stop loss
-        tr1 = high - low
-        tr2 = abs(high - close.shift())
-        tr3 = abs(low - close.shift())
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        atr = tr.rolling(14).mean().iloc[-1]
-
-        stop_loss = current_price - (1.5 * atr)
-        target = current_price + (2 * atr)
-
-        # Scoring
         score = 0
 
-        if current_price > ema20:
+        # Trend Filters
+        if price > ema20:
             score += 20
-        if current_price > ema50:
+        if price > ema50:
             score += 20
+
+        # 30-Day Breakout
+        breakout_level = df["High"].rolling(30).max().iloc[-2]
+        breakout = price > breakout_level
         if breakout:
             score += 25
-        if vol_confirm:
+
+        # Volume Confirmation
+        avg_vol = df["Volume"].rolling(20).mean().iloc[-1]
+        if latest["Volume"] > 1.5 * avg_vol:
             score += 15
-        if relative_strength:
-            score += 20
+
+        # Relative Strength vs NIFTY
+        nifty = yf.download("^NSEI", period="2mo", interval="1d", progress=False)
+        if not nifty.empty and len(nifty) > 30:
+            stock_return = (price / df["Close"].iloc[-20]) - 1
+            nifty_return = (nifty["Close"].iloc[-1] / nifty["Close"].iloc[-20]) - 1
+
+            if stock_return > nifty_return:
+                score += 20
+
+        # Not Overextended (within 8% of EMA20)
+        distance_from_ema20 = (price - ema20) / ema20
+        if distance_from_ema20 > 0.08:
+            return None
+
+        # Volatility Contraction
+        if latest["ATR5"] >= latest["ATR20"]:
+            return None
+
+        # Strong Close
+        candle_range = latest["High"] - latest["Low"]
+        if candle_range > 0:
+            close_position = (price - latest["Low"]) / candle_range
+            if close_position < 0.7:
+                return None
 
         if score < 60:
             return None
 
+        atr = latest["ATR14"]
+        stop_loss = price - 1.5 * atr
+        target = price + 2 * atr
+
         return {
-            "Stock": symbol,
-            "Price": round(current_price, 2),
+            "Symbol": symbol,
+            "Price": round(price, 2),
             "Score": score,
-            "Target": round(target, 2),
-            "Stop Loss": round(stop_loss, 2)
+            "Stop Loss": round(stop_loss, 2),
+            "Target": round(target, 2)
         }
 
     except:
         return None
 
-
 # -------------------------------
-# Main App Logic
+# Scan Button
 # -------------------------------
-
-if st.button("🔎 Scan Market for Swing Setups"):
-
-    if not market_trend() is False:
-        st.warning("Market trend is weak (NIFTY below 50 EMA). Avoid aggressive buying.")
-        st.stop()
-
-    st.success("Market trend is positive. Scanning for opportunities...")
-
-    stocks = get_nse_stocks()
-    nifty_data = yf.download("^NSEI", period="3mo", progress=False)
+if st.button("🔍 Scan Market"):
 
     results = []
 
-    with st.spinner("Scanning top liquid stocks..."):
-        for stock in stocks[:400]:   # Limit for stability
-            result = analyze_stock(stock, nifty_data)
-            if result:
-                results.append(result)
+    progress = st.progress(0)
+    total = len(nse_stocks)
+
+    for i, stock in enumerate(nse_stocks):
+        res = analyze_stock(stock)
+        if res:
+            results.append(res)
+        progress.progress((i + 1) / total)
 
     if results:
-        df = pd.DataFrame(results).sort_values("Score", ascending=False)
-
-        st.subheader("🏆 Top Swing Opportunities")
-
-        for _, row in df.head(5).iterrows():
-            st.markdown(f"""
-            ### {row['Stock']} — Score {row['Score']}/100
-            💰 Price: ₹{row['Price']}  
-            🎯 Target: ₹{row['Target']}  
-            🛑 Stop Loss: ₹{row['Stop Loss']}  
-            ---
-            """)
-
-        st.subheader("📊 Full Ranked List")
-        st.dataframe(df, use_container_width=True)
-
+        df_results = pd.DataFrame(results)
+        df_results = df_results.sort_values(by="Score", ascending=False)
+        st.success("High Probability Setups Found")
+        st.dataframe(df_results)
     else:
-        st.warning("No strong swing setups found today.")
-
-st.markdown("---")
-st.caption("Educational tool. Not financial advice.")
+        st.info("No strong setups found today.")
