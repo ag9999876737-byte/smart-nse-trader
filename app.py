@@ -3,7 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 from st_aggrid import AgGrid, GridOptionsBuilder
-from datetime import datetime, timedelta
+from datetime import datetime
 import concurrent.futures
 
 # --------------------------
@@ -31,10 +31,20 @@ TOP_250 = [
     "IOC.NS","HINDALCO.NS","BAJAJ-AUTO.NS","PIDILITIND.NS"
 ]
 
-symbols = list(set(TOP_250))  # Remove duplicates
+symbols = list(set(TOP_250))
 
 # --------------------------
-# CACHED STOCK DOWNLOAD
+# FIXED SCORING WEIGHTS
+# --------------------------
+WEIGHTS = {
+    "trend": 40,
+    "breakout": 20,
+    "volume": 15,
+    "relative_strength": 15
+}
+
+# --------------------------
+# SAFE STOCK DOWNLOAD
 # --------------------------
 @st.cache_data(ttl=1800)
 def download_batch(symbols, period="6mo", interval="1d"):
@@ -47,8 +57,7 @@ def download_batch(symbols, period="6mo", interval="1d"):
             progress=False
         )
         return df
-    except Exception as e:
-        st.error(f"Batch download failed: {e}")
+    except:
         return None
 
 # --------------------------
@@ -73,19 +82,9 @@ else:
     st.info("Market Regime Unknown")
 
 # --------------------------
-# SIDEBAR WEIGHTS
-# --------------------------
-st.sidebar.header("Scoring Weights")
-trend_weight = st.sidebar.slider("Trend Weight", 0, 50, 40)
-breakout_weight = st.sidebar.slider("Breakout Weight", 0, 30, 20)
-volume_weight = st.sidebar.slider("Volume Weight", 0, 20, 15)
-rs_weight = st.sidebar.slider("Relative Strength Weight", 0, 20, 15)
-
-# --------------------------
 # ANALYSIS FUNCTION
 # --------------------------
 def analyze_stock(symbol, nifty_return, data):
-
     try:
         if len(data) < 60 or "Close" not in data.columns:
             return None
@@ -93,9 +92,6 @@ def analyze_stock(symbol, nifty_return, data):
         df = data.copy()
         df["EMA20"] = df["Close"].ewm(span=20).mean()
         df["EMA50"] = df["Close"].ewm(span=50).mean()
-        df["EMA20_weekly"] = df["Close"].resample("W").last().ewm(span=20).mean()
-        df["EMA50_weekly"] = df["Close"].resample("W").last().ewm(span=50).mean()
-
         df["TR"] = np.maximum(
             df["High"] - df["Low"],
             np.maximum(
@@ -114,33 +110,33 @@ def analyze_stock(symbol, nifty_return, data):
         score = 0
         warning = ""
 
-        # Trend
+        # --- Trend
         if price > ema20 and price > ema50:
-            score += trend_weight
+            score += WEIGHTS["trend"]
         else:
             warning = "Below EMA50"
 
-        # Breakout
+        # --- Breakout
         breakout_level = float(df["High"].rolling(30).max().iloc[-2])
         if price > breakout_level:
-            score += breakout_weight
+            score += WEIGHTS["breakout"]
 
-        # Volume Spike
+        # --- Volume Spike
         avg_vol = float(df["Volume"].rolling(20).mean().iloc[-1])
         if float(latest["Volume"]) > 1.3 * avg_vol:
-            score += volume_weight
+            score += WEIGHTS["volume"]
 
-        # Relative Strength vs Nifty
+        # --- Relative Strength vs Nifty
         stock_return = (price / float(df["Close"].iloc[-20])) - 1
         if stock_return > nifty_return:
-            score += rs_weight
+            score += WEIGHTS["relative_strength"]
 
-        # Stop Loss / Target
+        # --- Stop Loss / Target / R:R
         stop_loss = price - (1.5 * atr)
         target = price + (2 * atr)
         rr_ratio = round((target - price) / (price - stop_loss), 2)
 
-        # Rating
+        # --- Rating
         if score >= 70:
             rating = "🔥 Strong Buy"
         elif score >= 55:
@@ -161,8 +157,22 @@ def analyze_stock(symbol, nifty_return, data):
             "RR Ratio": rr_ratio
         }
 
-    except Exception as e:
+    except:
         return None
+
+# --------------------------
+# SAFE RATING COLOR FOR AGGRID
+# --------------------------
+def rating_color(params):
+    val = params.value
+    if isinstance(val, str):
+        if '🔥' in val:
+            return {'color': 'red', 'fontWeight': 'bold'}
+        elif '✅' in val:
+            return {'color': 'green', 'fontWeight': 'bold'}
+        elif '👀' in val:
+            return {'color': 'orange', 'fontWeight': 'bold'}
+    return {}
 
 # --------------------------
 # SCAN BUTTON
@@ -170,8 +180,6 @@ def analyze_stock(symbol, nifty_return, data):
 if st.button("🔍 Scan Market"):
 
     st.write("Scanning stocks... Please wait ⏳")
-
-    # Batch download all stock data
     data = download_batch(symbols)
     if data is None:
         st.error("Failed to download stock data.")
@@ -187,31 +195,33 @@ if st.button("🔍 Scan Market"):
         results = []
 
         with st.spinner("Analyzing stocks..."):
-            # Use ThreadPool for faster analysis
-            def process_stock(symbol):
-                if symbol in data.columns.levels[0]:  # MultiTicker
-                    stock_data = data[symbol]
-                else:
-                    stock_data = data[symbol]
-                return analyze_stock(symbol, nifty_return, stock_data)
 
+            def process_stock(symbol):
+                try:
+                    stock_data = data[symbol]
+                    return analyze_stock(symbol, nifty_return, stock_data)
+                except:
+                    return None
+
+            # ThreadPool for faster scanning
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as executor:
-                future_to_symbol = {executor.submit(process_stock, sym): sym for sym in symbols}
-                for future in concurrent.futures.as_completed(future_to_symbol):
+                futures = [executor.submit(process_stock, sym) for sym in symbols]
+                for future in concurrent.futures.as_completed(futures):
                     res = future.result()
                     if res:
                         results.append(res)
 
         if results:
-            df_results = pd.DataFrame(results)
+            df_results = pd.DataFrame(results).fillna("").copy()
             df_results = df_results.sort_values(by="Score", ascending=False)
+
             st.success("Top Opportunities (Sorted by Score)")
 
-            # Display using AgGrid
+            # AGGRID display
             gb = GridOptionsBuilder.from_dataframe(df_results.head(50))
             gb.configure_pagination(paginationAutoPageSize=True)
             gb.configure_default_column(editable=False, groupable=True)
-            gb.configure_column("Rating", cellStyle=lambda x: {'color': 'red'} if '🔥' in x else {'color': 'green'})
+            gb.configure_column("Rating", cellStyle=rating_color)
             AgGrid(df_results.head(50), gridOptions=gb.build(), height=400)
 
         else:
