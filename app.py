@@ -8,9 +8,9 @@ import concurrent.futures
 # --------------------------
 # PAGE CONFIG
 # --------------------------
-st.set_page_config(page_title="Smart NSE Scanner + Portfolio", layout="wide")
-st.title("📈 Smart NSE Swing Scanner + Portfolio")
-st.write("Momentum-based ranking engine with risk management and portfolio insights")
+st.set_page_config(page_title="Smart NSE Scanner + Professional Portfolio", layout="wide")
+st.title("📈 Smart NSE Swing Scanner + Professional Portfolio")
+st.write("Momentum-based ranking engine with risk management and actionable portfolio insights")
 
 # --------------------------
 # TOP 250 NSE STOCKS
@@ -59,14 +59,11 @@ if "portfolio" not in st.session_state:
 
 # Add custom stock
 st.header("📊 My Portfolio")
-with st.expander("Add Stock"):
+with st.expander("Add Stock to Portfolio"):
     col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        p_symbol = st.text_input("Symbol (e.g., INFY.NS)")
-    with col2:
-        p_qty = st.number_input("Quantity",min_value=1,value=1)
-    with col3:
-        p_price = st.number_input("Buy Price",min_value=0.0,value=0.0,format="%.2f")
+    with col1: p_symbol = st.text_input("Symbol (e.g., INFY.NS)")
+    with col2: p_qty = st.number_input("Quantity",min_value=1,value=1)
+    with col3: p_price = st.number_input("Buy Price",min_value=0.0,value=0.0,format="%.2f")
     with col4:
         if st.button("Add Stock"):
             if p_symbol and p_symbol not in [x['Symbol'] for x in st.session_state.portfolio]:
@@ -90,51 +87,39 @@ def download_batch(symbols, period="6mo", interval="1d"):
 @st.cache_data(ttl=3600)
 def get_market_regime():
     df = yf.download("^NSEI", period="3mo", interval="1d", progress=False)
-    if df is None or df.empty or "Close" not in df.columns:
-        return "Unknown"
+    if df is None or df.empty or "Close" not in df.columns: return "Unknown"
     df["EMA50"] = df["Close"].ewm(span=50).mean()
-    close = df["Close"].iloc[-1]
-    ema50 = df["EMA50"].iloc[-1]
-    return "Bullish" if close > ema50 else "Weak"
+    return "Bullish" if df["Close"].iloc[-1] > df["EMA50"].iloc[-1] else "Weak"
 
 market_regime = get_market_regime()
-if market_regime == "Weak":
-    st.warning("⚠ Market Trend Weak — Trades carry higher risk")
-elif market_regime == "Bullish":
-    st.success("✅ Market Trend Bullish")
-else:
-    st.info("Market Regime Unknown")
+if market_regime == "Weak": st.warning("⚠ Market Trend Weak — Trades carry higher risk")
+elif market_regime == "Bullish": st.success("✅ Market Trend Bullish")
+else: st.info("Market Regime Unknown")
 
 # --------------------------
 # ANALYSIS FUNCTION
 # --------------------------
 def analyze_stock(symbol, nifty_return, data):
     try:
-        if len(data)<60 or "Close" not in data.columns:
-            return None
-        df = data.copy()
+        if len(data)<60 or "Close" not in data.columns: return None
+        df=data.copy()
         df["EMA20"]=df["Close"].ewm(span=20).mean()
         df["EMA50"]=df["Close"].ewm(span=50).mean()
-        df["TR"]=np.maximum(df["High"]-df["Low"],np.maximum(abs(df["High"]-df["Close"].shift()),abs(df["Low"]-df["Close"].shift())))
+        df["TR"]=np.maximum(df["High"]-df["Low"], np.maximum(abs(df["High"]-df["Close"].shift()),abs(df["Low"]-df["Close"].shift())))
         df["ATR14"]=df["TR"].rolling(14).mean()
         latest=df.iloc[-1]
         price=float(latest["Close"])
         atr=float(latest["ATR14"])
         score=0
         warning=""
-        if price>float(latest["EMA20"]) and price>float(latest["EMA50"]):
-            score+=WEIGHTS["trend"]
-        else:
-            warning="Below EMA50"
+        if price>float(latest["EMA20"]) and price>float(latest["EMA50"]): score+=WEIGHTS["trend"]
+        else: warning="Below EMA50"
         breakout_level=float(df["High"].rolling(30).max().iloc[-2])
-        if price>breakout_level:
-            score+=WEIGHTS["breakout"]
+        if price>breakout_level: score+=WEIGHTS["breakout"]
         avg_vol=float(df["Volume"].rolling(20).mean().iloc[-1])
-        if float(latest["Volume"])>1.3*avg_vol:
-            score+=WEIGHTS["volume"]
+        if float(latest["Volume"])>1.3*avg_vol: score+=WEIGHTS["volume"]
         stock_return=(price/float(df["Close"].iloc[-20]))-1
-        if stock_return>nifty_return:
-            score+=WEIGHTS["relative_strength"]
+        if stock_return>nifty_return: score+=WEIGHTS["relative_strength"]
         stop_loss=price-(1.5*atr)
         target=price+(2*atr)
         rr_ratio=round((target-price)/(price-stop_loss),2)
@@ -147,8 +132,7 @@ def analyze_stock(symbol, nifty_return, data):
         return {"Symbol":symbol,"Price":round(price,2),"Score":score,"Rating":rating,
                 "Warning":warning,"Stop Loss":round(stop_loss,2),"Target":round(target,2),
                 "RR Ratio":rr_ratio,"Sell Hint":sell_hint}
-    except:
-        return None
+    except: return None
 
 # --------------------------
 # AGGRID COLOR
@@ -160,6 +144,15 @@ def rating_color(params):
         elif '✅' in val: return {'color':'green','fontWeight':'bold'}
         elif '👀' in val: return {'color':'orange','fontWeight':'bold'}
     return {}
+
+# --------------------------
+# PORTFOLIO RECOMMENDATION
+# --------------------------
+def portfolio_action(price, buy_price, rr_ratio, ema50, target):
+    if price < buy_price*0.95 and price>ema50: return "💰 Buy More"
+    elif price>target or rr_ratio>2: return "🏁 Consider Selling / Take Profit"
+    elif price<ema50 or rr_ratio<1: return "⚠ Sell / Cut Loss"
+    else: return "👀 Hold"
 
 # --------------------------
 # SCAN MARKET
@@ -200,7 +193,7 @@ if st.button("🔍 Scan Market"):
             except: st.dataframe(df_results.head(50))
 
             # --------------------------
-            # PORTFOLIO EVALUATION
+            # PORTFOLIO ANALYSIS
             # --------------------------
             st.header("📈 Portfolio Analysis")
             if st.session_state.portfolio:
@@ -215,19 +208,29 @@ if st.button("🔍 Scan Market"):
                     try:
                         if symbol in symbols:
                             price=df_results[df_results['Symbol']==symbol]['Price'].values[0]
+                            target=df_results[df_results['Symbol']==symbol]['Target'].values[0]
+                            rr_ratio=df_results[df_results['Symbol']==symbol]['RR Ratio'].values[0]
+                            ema50=df_results[df_results['Symbol']==symbol]['Price'].values[0]-rr_ratio  # approx
                         else:
                             price=float(port_data[symbol]['Close'].iloc[-1])
+                            high=float(port_data[symbol]['High'].rolling(30).max().iloc[-1])
+                            low=float(port_data[symbol]['Low'].rolling(30).min().iloc[-1])
+                            atr=(high-low)/2
+                            target=price+2*atr
+                            stop_loss=price-1.5*atr
+                            rr_ratio=(target-price)/(price-stop_loss)
+                            ema50=port_data[symbol]['Close'].rolling(50).mean().iloc[-1]
                     except:
-                        price=0
+                        price=0; target=0; rr_ratio=0; ema50=0
                     unrealized=round((price-buy_price)*qty,2)
-                    judgement=""
-                    if price<buy_price: judgement="⚠ Price below buy"
-                    elif price>buy_price*1.05: judgement="✅ Good Profit Potential"
-                    else: judgement="👀 Monitor"
+                    action=portfolio_action(price,buy_price,rr_ratio,ema50,target)
                     portfolio_data.append({"Symbol":symbol,"Quantity":qty,"Buy Price":buy_price,
-                                           "Current Price":price,"Unrealized P&L":unrealized,"Judgement":judgement})
+                                           "Current Price":price,"Unrealized P&L":unrealized,
+                                           "RR Ratio":rr_ratio,"Target Price":round(target,2),
+                                           "Suggested Action":action})
                 df_port=pd.DataFrame(portfolio_data)
                 st.dataframe(df_port)
-            else: st.info("No stocks in portfolio yet.")
+            else:
+                st.info("No stocks in portfolio yet.")
         else:
             st.info("No valid setups found.")
